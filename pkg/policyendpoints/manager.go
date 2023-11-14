@@ -171,7 +171,58 @@ func (m *policyEndpointsManager) computePolicyEndpoints(policy *networking.Netwo
 		}
 	}
 
+	updatePolicyEndpoints, deletePolicyEndpoints = m.compressPolicyEndpoints(updatePolicyEndpoints, deletePolicyEndpoints)
+
 	return createPolicyEndpoints, updatePolicyEndpoints, deletePolicyEndpoints, nil
+}
+
+// compressPolicyEndpoints further compresses the endpoints to ensure every PE being packed with full size if possible.
+func (m *policyEndpointsManager) compressPolicyEndpoints(update, delete []policyinfo.PolicyEndpoint) ([]policyinfo.PolicyEndpoint, []policyinfo.PolicyEndpoint) {
+	var ingressRules []policyinfo.EndpointInfo
+	var egressRules []policyinfo.EndpointInfo
+	var podSelectorEndpoints []policyinfo.PodEndpoint
+
+	for _, u := range update {
+		ingressRules = append(ingressRules, u.Spec.Ingress...)
+		egressRules = append(egressRules, u.Spec.Egress...)
+		podSelectorEndpoints = append(podSelectorEndpoints, u.Spec.PodSelectorEndpoints...)
+		u.Spec.Ingress = nil
+		u.Spec.Egress = nil
+		u.Spec.PodSelectorEndpoints = nil
+	}
+
+	ingressChunks := lo.Chunk(ingressRules, m.endpointChunkSize)
+	egressChunks := lo.Chunk(egressRules, m.endpointChunkSize)
+	podSelectorChunks := lo.Chunk(podSelectorEndpoints, m.endpointChunkSize)
+
+	i := 0
+	e := 0
+	p := 0
+
+	var compressedUpdate []policyinfo.PolicyEndpoint
+
+	for _, u := range update {
+		// either one of the policies has items, we compress them to the updated PE
+		if i < len(ingressChunks) || e < len(egressChunks) || p < len(podSelectorChunks) {
+			if i < len(ingressChunks) {
+				u.Spec.Ingress = ingressChunks[i]
+				i++
+			}
+			if e < len(egressChunks) {
+				u.Spec.Egress = egressChunks[e]
+				e++
+			}
+			if p < len(podSelectorChunks) {
+				u.Spec.PodSelectorEndpoints = podSelectorChunks[p]
+				p++
+			}
+			compressedUpdate = append(compressedUpdate, u)
+		} else {
+			// otherwise, we delete the empty PE
+			delete = append(delete, u)
+		}
+	}
+	return compressedUpdate, delete
 }
 
 func (m *policyEndpointsManager) newPolicyEndpoint(policy *networking.NetworkPolicy,
