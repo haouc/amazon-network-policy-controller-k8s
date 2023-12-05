@@ -2,6 +2,7 @@ package resolvers
 
 import (
 	"context"
+	"fmt"
 	"sort"
 	"testing"
 
@@ -278,6 +279,29 @@ func TestEndpointsResolver_Resolve(t *testing.T) {
 			},
 		},
 	}
+	pod4 := corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "pod4",
+			Namespace: "source",
+			Annotations: map[string]string{
+				"vpc.amazonaws.com/pod-ips": "1.0.0.4",
+			},
+		},
+		Spec: corev1.PodSpec{
+			Containers: []corev1.Container{
+				{
+					Name: "pod4",
+					Ports: []corev1.ContainerPort{
+						{
+							Name:          "test-port",
+							ContainerPort: 8000,
+							Protocol:      protocolTCP,
+						},
+					},
+				},
+			},
+		},
+	}
 	podNoIP := corev1.Pod{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      "pod-no-ip",
@@ -495,6 +519,77 @@ func TestEndpointsResolver_Resolve(t *testing.T) {
 			},
 		},
 		{
+			name: "resolve network peers with different ports, ingress/egress",
+			args: args{
+				netpol: &networking.NetworkPolicy{
+					ObjectMeta: metav1.ObjectMeta{
+						Name:      "netpol",
+						Namespace: "np",
+					},
+					Spec: networking.NetworkPolicySpec{
+						PodSelector: metav1.LabelSelector{},
+						PolicyTypes: []networking.PolicyType{networking.PolicyTypeIngress, networking.PolicyTypeEgress},
+						Ingress: []networking.NetworkPolicyIngressRule{
+							{
+								From: []networking.NetworkPolicyPeer{
+									{
+										IPBlock: &networking.IPBlock{
+											CIDR:   "10.20.0.0/16",
+											Except: []string{"10.20.0.5", "10.20.0.6"},
+										},
+										NamespaceSelector: &metav1.LabelSelector{
+											MatchLabels: map[string]string{
+												"Namespace": "source",
+											},
+										},
+									},
+								},
+								Ports: []networking.NetworkPolicyPort{
+									{
+										Protocol: &protocolTCP,
+										Port:     &intOrStrPort80,
+									},
+								},
+							},
+						},
+						Egress: []networking.NetworkPolicyEgressRule{
+							{
+								To: []networking.NetworkPolicyPeer{
+									{
+										IPBlock: &networking.IPBlock{
+											CIDR:   "10.30.0.0/16",
+											Except: []string{"10.30.0.5", "10.30.0.6"},
+										},
+									},
+								},
+								Ports: []networking.NetworkPolicyPort{
+									{
+										Protocol: &protocolTCP,
+										Port:     &intOrStrPort80,
+										EndPort:  &port443,
+									},
+								},
+							},
+						},
+					},
+				},
+				podListCalls: []podListCall{
+					{
+						pods: []corev1.Pod{pod4},
+					},
+				},
+			},
+			wantIngressEndpoints: []policyinfo.EndpointInfo{
+				{CIDR: "10.20.0.0/16", Except: []policyinfo.NetworkAddress{"10.20.0.5", "10.20.0.6"}, Ports: []policyinfo.Port{{Protocol: &protocolTCP, Port: &port80}}},
+			},
+			wantEgressEndpoints: []policyinfo.EndpointInfo{
+				{CIDR: "10.30.0.0/16", Except: []policyinfo.NetworkAddress{"10.30.0.5", "10.30.0.6"}, Ports: []policyinfo.Port{{Protocol: &protocolTCP, Port: &port80, EndPort: &port443}}},
+			},
+			wantPodEndpoints: []policyinfo.PodEndpoint{
+				{PodIP: "1.0.0.4", Name: "pod4", Namespace: "source"},
+			},
+		},
+		{
 			name: "allow all, ingress/egress to specific ports",
 			args: args{
 				netpol: &networking.NetworkPolicy{
@@ -630,6 +725,8 @@ func TestEndpointsResolver_Resolve(t *testing.T) {
 						return lst[i].Name < lst[j].Name
 					})
 				}
+
+				fmt.Println(ingressEndpoints)
 
 				assert.Equal(t, tt.wantIngressEndpoints, ingressEndpoints)
 				assert.Equal(t, tt.wantEgressEndpoints, egressEndpoints)
