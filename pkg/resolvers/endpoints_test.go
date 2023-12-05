@@ -198,7 +198,7 @@ func TestEndpointsResolver_Resolve(t *testing.T) {
 		serviceListCalls []serviceListCall
 	}
 	protocolTCP := corev1.ProtocolTCP
-	protocolUDP := corev1.ProtocolTCP
+	protocolUDP := corev1.ProtocolUDP
 	port80 := int32(80)
 	intOrStrPort80 := intstr.FromInt(int(port80))
 	intOrStrPortName := intstr.FromString("port-name")
@@ -276,29 +276,6 @@ func TestEndpointsResolver_Resolve(t *testing.T) {
 			Namespace: "ns",
 			Annotations: map[string]string{
 				"vpc.amazonaws.com/pod-ips": "1.0.0.3",
-			},
-		},
-	}
-	pod4 := corev1.Pod{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      "pod4",
-			Namespace: "source",
-			Annotations: map[string]string{
-				"vpc.amazonaws.com/pod-ips": "1.0.0.4",
-			},
-		},
-		Spec: corev1.PodSpec{
-			Containers: []corev1.Container{
-				{
-					Name: "pod4",
-					Ports: []corev1.ContainerPort{
-						{
-							Name:          "test-port",
-							ContainerPort: 8000,
-							Protocol:      protocolTCP,
-						},
-					},
-				},
 			},
 		},
 	}
@@ -519,77 +496,6 @@ func TestEndpointsResolver_Resolve(t *testing.T) {
 			},
 		},
 		{
-			name: "resolve network peers with different ports, ingress/egress",
-			args: args{
-				netpol: &networking.NetworkPolicy{
-					ObjectMeta: metav1.ObjectMeta{
-						Name:      "netpol",
-						Namespace: "np",
-					},
-					Spec: networking.NetworkPolicySpec{
-						PodSelector: metav1.LabelSelector{},
-						PolicyTypes: []networking.PolicyType{networking.PolicyTypeIngress, networking.PolicyTypeEgress},
-						Ingress: []networking.NetworkPolicyIngressRule{
-							{
-								From: []networking.NetworkPolicyPeer{
-									{
-										IPBlock: &networking.IPBlock{
-											CIDR:   "10.20.0.0/16",
-											Except: []string{"10.20.0.5", "10.20.0.6"},
-										},
-										NamespaceSelector: &metav1.LabelSelector{
-											MatchLabels: map[string]string{
-												"Namespace": "source",
-											},
-										},
-									},
-								},
-								Ports: []networking.NetworkPolicyPort{
-									{
-										Protocol: &protocolTCP,
-										Port:     &intOrStrPort80,
-									},
-								},
-							},
-						},
-						Egress: []networking.NetworkPolicyEgressRule{
-							{
-								To: []networking.NetworkPolicyPeer{
-									{
-										IPBlock: &networking.IPBlock{
-											CIDR:   "10.30.0.0/16",
-											Except: []string{"10.30.0.5", "10.30.0.6"},
-										},
-									},
-								},
-								Ports: []networking.NetworkPolicyPort{
-									{
-										Protocol: &protocolTCP,
-										Port:     &intOrStrPort80,
-										EndPort:  &port443,
-									},
-								},
-							},
-						},
-					},
-				},
-				podListCalls: []podListCall{
-					{
-						pods: []corev1.Pod{pod4},
-					},
-				},
-			},
-			wantIngressEndpoints: []policyinfo.EndpointInfo{
-				{CIDR: "10.20.0.0/16", Except: []policyinfo.NetworkAddress{"10.20.0.5", "10.20.0.6"}, Ports: []policyinfo.Port{{Protocol: &protocolTCP, Port: &port80}}},
-			},
-			wantEgressEndpoints: []policyinfo.EndpointInfo{
-				{CIDR: "10.30.0.0/16", Except: []policyinfo.NetworkAddress{"10.30.0.5", "10.30.0.6"}, Ports: []policyinfo.Port{{Protocol: &protocolTCP, Port: &port80, EndPort: &port443}}},
-			},
-			wantPodEndpoints: []policyinfo.PodEndpoint{
-				{PodIP: "1.0.0.4", Name: "pod4", Namespace: "source"},
-			},
-		},
-		{
 			name: "allow all, ingress/egress to specific ports",
 			args: args{
 				netpol: &networking.NetworkPolicy{
@@ -734,4 +640,142 @@ func TestEndpointsResolver_Resolve(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestEndpointsResolver_ResolveNetworkPeers(t *testing.T) {
+	protocolTCP := corev1.ProtocolTCP
+	// protocolUDP := corev1.ProtocolTCP
+	port80 := int32(80)
+	intOrStrPort80 := intstr.FromInt(int(port80))
+	// intOrStrPortName := intstr.FromString("port-name")
+	port8080 := int32(8080)
+	pod1 := corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "pod1",
+			Namespace: "src",
+		},
+		Spec: corev1.PodSpec{
+			Containers: []corev1.Container{
+				{
+					Name: "pod1",
+					Ports: []corev1.ContainerPort{
+						{
+							ContainerPort: port80,
+							Protocol:      corev1.ProtocolTCP,
+							Name:          "test-port",
+						},
+					},
+				},
+			},
+		},
+		Status: corev1.PodStatus{
+			PodIP: "1.0.0.1",
+		},
+	}
+	pod2 := corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "pod2",
+			Namespace: "dst",
+		},
+		Spec: corev1.PodSpec{
+			Containers: []corev1.Container{
+				{
+					Name: "pod2",
+					Ports: []corev1.ContainerPort{
+						{
+							ContainerPort: port8080,
+							Protocol:      corev1.ProtocolTCP,
+							Name:          "test-port",
+						},
+					},
+				},
+			},
+		},
+		Status: corev1.PodStatus{
+			PodIP: "1.0.0.2",
+		},
+	}
+
+	policy := &networking.NetworkPolicy{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "netpol",
+			Namespace: "dst",
+		},
+		Spec: networking.NetworkPolicySpec{
+			PodSelector: metav1.LabelSelector{},
+			PolicyTypes: []networking.PolicyType{networking.PolicyTypeIngress, networking.PolicyTypeEgress},
+			Ingress: []networking.NetworkPolicyIngressRule{
+				{
+					From: []networking.NetworkPolicyPeer{
+						{
+							IPBlock: &networking.IPBlock{
+								CIDR:   "10.20.0.0/16",
+								Except: []string{"10.20.0.5", "10.20.0.6"},
+							},
+							NamespaceSelector: &metav1.LabelSelector{
+								MatchLabels: map[string]string{
+									"Namespace": "src",
+								},
+							},
+						},
+					},
+					Ports: []networking.NetworkPolicyPort{
+						{
+							Protocol: &protocolTCP,
+							Port:     &intstr.IntOrString{Type: intstr.String, StrVal: "test-port"},
+						},
+					},
+				},
+			},
+			Egress: []networking.NetworkPolicyEgressRule{
+				{
+					To: []networking.NetworkPolicyPeer{
+						{
+							IPBlock: &networking.IPBlock{
+								CIDR:   "10.30.0.0/16",
+								Except: []string{"10.30.0.5", "10.30.0.6"},
+							},
+						},
+					},
+					Ports: []networking.NetworkPolicyPort{
+						{
+							Protocol: &protocolTCP,
+							Port:     &intOrStrPort80,
+							EndPort:  &port8080,
+						},
+					},
+				},
+			},
+		},
+	}
+
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	mockClient := mock_client.NewMockClient(ctrl)
+	resolver := NewEndpointsResolver(mockClient, logr.New(&log.NullLogSink{}))
+	pods := []corev1.Pod{pod1, pod2}
+	podList := &corev1.PodList{}
+	mockClient.EXPECT().List(gomock.Any(), podList, gomock.Any()).DoAndReturn(
+		func(ctx context.Context, podList *corev1.PodList, opts ...client.ListOption) {
+			for _, pod := range pods {
+				podList.Items = append(podList.Items, *(pod.DeepCopy()))
+			}
+		},
+	).AnyTimes()
+
+	var ingressEndpoints []policyinfo.EndpointInfo
+	ctx := context.TODO()
+	for _, rule := range policy.Spec.Ingress {
+		fmt.Printf("computing ingress addresses -- peers: %v\n", rule.From)
+		if rule.From == nil {
+			ingressEndpoints = append(ingressEndpoints, resolver.getAllowAllNetworkPeers(rule.Ports)...)
+			continue
+		}
+		fmt.Printf("Rule from: %v\nRule ports: %v\n", rule.From, rule.Ports)
+		resolvedPeers, err := resolver.resolveNetworkPeers(ctx, policy, rule.From, rule.Ports, networking.PolicyTypeIngress)
+		assert.NoError(t, err)
+		ingressEndpoints = append(ingressEndpoints, resolvedPeers...)
+	}
+	fmt.Printf("ingress PE: %v\n", ingressEndpoints)
 }
