@@ -55,7 +55,7 @@ jobs:
     name: Detect deprecated apiGroups
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v4
       - run: |
           version=$(curl -sL https://api.github.com/repos/FairwindsOps/pluto/releases/latest | jq -r ".tag_name")
           number=${version:1}
@@ -67,12 +67,12 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
+      - name: Checkout
+        uses: actions/checkout@v4
       - name: Set variables
         run: |
-          VER=$(cat ../../.go-version)
+          VER=$(cat .go-version)
           echo "VERSION=$VER" >> $GITHUB_ENV
-      - name: Checkout
-        uses: actions/checkout@v3
       - uses: actions/setup-go@v4
         with:
           go-version: ${{ env.VERSION }}
